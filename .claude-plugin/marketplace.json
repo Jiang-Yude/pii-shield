@@ -1,0 +1,14 @@
+{
+  "name": "pii-shield",
+  "owner": {
+    "name": "Jiang Yu-de"
+  },
+  "plugins": [
+    {
+      "name": "pii-shield",
+      "source": "./",
+      "description": "個資防護盾：AI 讀資料之前，先在本機把人名、身分證號、手機、Email 換成代號"
+    }
+  ],
+  "description": "個資防護盾 pii-shield 的安裝來源"
+}

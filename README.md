@@ -61,7 +61,20 @@ claude plugin validate ./pii-shield
 
 ## 安裝
 
-需要 Claude Code v2.1.287 以上。
+需要 Claude Code v2.1.287 以上。終端機版與 Claude 桌面 App 的 Code 分頁都能用（桌面 App 的 WSL 環境不支援 Mods）。
+
+### 方法一：用外掛市集安裝（桌面 App 也適用）
+
+在 Claude Code 對話框輸入：
+
+```text
+/plugin marketplace add Jiang-Yude/pii-shield
+/plugin install pii-shield@pii-shield
+```
+
+這種裝法，外掛會被複製到 Claude Code 的快取資料夾，所以名單一定要放在你自己指定的位置：在設定選單找到 `pii-shield` 的 `Names file`，填入名單檔的絕對路徑。沒填或找不到檔案時，防護盾會停止送出，直到你設定好。
+
+### 方法二：下載原始碼直接載入（終端機）
 
 ```bash
 git clone https://github.com/Jiang-Yude/pii-shield.git
