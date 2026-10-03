@@ -11,7 +11,7 @@ const AUTO_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
 ]
 
 const MEDIA = /\.(pdf|png|jpe?g|gif|webp|heic|bmp|tiff?)$/i
-const FAILED = '〔個資防護盾：遮蔽失敗或找不到名單，這段內容沒有送給 AI〕'
+const FAILED = '〔個資防護盾：遮蔽失敗或名單無效，這段內容沒有送給 AI〕'
 
 // Only these tools write to local files; real names are put back into these fields alone.
 const WRITE_FIELDS: Readonly<Record<string, readonly string[]>> = {
@@ -25,6 +25,7 @@ type Entry = { real: string; alias: string }
 
 let entries: Entry[] | undefined
 let missing = false
+let loadError = ''
 let restore = false
 let allowEmpty = false
 let namesFile = 'names.txt'
@@ -43,6 +44,10 @@ function parseNames(text: string): Entry[] {
     aliases.add(alias)
     if (real.includes('〔') || real.includes('〕')) throw new Error('名字不能含〔〕')
   }
+  // An alias that contains a protected name would put that name back into the text after masking.
+  for (const { alias } of parsed) {
+    for (const { real } of parsed) if (alias.includes(real)) throw new Error(`代號 ${alias} 含有保護名單上的名字`)
+  }
   // Longest first, so 王小明 is replaced before 小明.
   return parsed.sort((a, b) => b.real.length - a.real.length)
 }
@@ -55,8 +60,15 @@ async function load($: any): Promise<Entry[]> {
     entries = []
     return entries
   }
-  entries = parseNames(await $.fs.read(path))
-  missing = false
+  try {
+    entries = parseNames(await $.fs.read(path))
+    loadError = ''
+  } catch (err) {
+    loadError = (err as Error).message
+    throw err
+  }
+  // A list with no names protects no one: treat it like a missing list.
+  missing = entries.length === 0
   return entries
 }
 
@@ -97,7 +109,8 @@ function maskBlocks(content: readonly any[], fn: (s: string) => string): any[] {
 }
 
 function statusLine(count: number): string {
-  if (missing) return allowEmpty ? '個資防護盾：只遮號碼與 Email（未使用名單）' : '個資防護盾：找不到名單，已停止送出'
+  if (loadError) return '個資防護盾：名單有錯，已停止送出'
+  if (missing) return allowEmpty ? '個資防護盾：只遮號碼與 Email（未使用名單）' : '個資防護盾：找不到名單或名單是空的，已停止送出'
   return `個資防護盾：保護 ${count} 個名字`
 }
 
@@ -105,6 +118,12 @@ export const register: Register = (on, options) => {
   if (typeof options.namesFile === 'string' && options.namesFile.trim()) namesFile = options.namesFile.trim()
 
   on('session.start', async ($, e, next) => {
+    // Every session starts from the safe defaults, whatever an earlier session chose.
+    entries = undefined
+    missing = false
+    loadError = ''
+    restore = false
+    allowEmpty = false
     await $.command.register({
       name: 'pii-shield',
       description: 'Show 個資防護盾 status; reload | restore on|off | no-names',
@@ -126,11 +145,11 @@ export const register: Register = (on, options) => {
     } catch (err) {
       entries = undefined
       $.ui.status('個資防護盾：名單有錯，已停止送出')
-      return { text: `個資防護盾：名單有錯（${(err as Error).message}），所有內容都不會送給 AI。改好後輸入 /pii-shield reload。` }
+      return { text: `個資防護盾：名單有錯（${(err as Error).message}），所有文字內容都不會送給 AI。改好後輸入 /pii-shield reload。` }
     }
     $.ui.status(statusLine(list.length))
     if (missing && !allowEmpty) {
-      return { text: '個資防護盾：找不到名單，所有內容都不會送給 AI。請建立 names.txt 後輸入 /pii-shield reload；只想遮號碼與 Email 就輸入 /pii-shield no-names。' }
+      return { text: '個資防護盾：找不到名單或名單是空的，所有文字內容都不會送給 AI。請建立 names.txt 後輸入 /pii-shield reload；只想遮號碼與 Email 就輸入 /pii-shield no-names。' }
     }
     return { text: `${statusLine(list.length)}，寫回真名${restore ? '開啟' : '關閉'}。` }
   })

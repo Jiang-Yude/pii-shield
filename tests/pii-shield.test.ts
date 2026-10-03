@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 // Fake names only. The real list lives outside the repo.
 const FIXTURE = '# 測試用假名單\n王小明\n陳美玲=個案B\n小明\n'
 const OPTS = { options: { namesFile: 'names.txt' } }
-const WITHHELD = '〔個資防護盾：遮蔽失敗或找不到名單，這段內容沒有送給 AI〕'
+const WITHHELD = '〔個資防護盾：遮蔽失敗或名單無效，這段內容沒有送給 AI〕'
 
 // Nothing sits beneath the plugin in a test, so the test answers file reads itself.
 function fakeDisk(on: any, text: string | null = FIXTURE) {
@@ -108,4 +108,29 @@ test('reading a PDF with Read is refused because media cannot be masked', OPTS, 
   on('tool.call', async () => ({ result: 'read' }))
   const out = await $.tool.call({ tool: 'Read', file_path: '個案資料.pdf' })
   expect(out.deny ?? (out as any).isError).toBeTruthy()
+})
+
+test('a names file with no names stops sending, same as a missing one', OPTS, async ($, on) => {
+  fakeDisk(on, '# 只有註解\n\n')
+  const seen = capturePrompt(on)
+  await $.prompt.submit({ text: '王小明' })
+  expect(seen.text).toBe(WITHHELD)
+})
+
+test('an alias that contains a protected name stops sending', OPTS, async ($, on) => {
+  fakeDisk(on, '王小明\n陳美玲=王小明\n')
+  const seen = capturePrompt(on)
+  await $.prompt.submit({ text: '陳美玲' })
+  expect(seen.text).toBe(WITHHELD)
+})
+
+test('CLAUDE.md and other context blocks are masked', OPTS, async ($, on) => {
+  fakeDisk(on)
+  let seen: any
+  on('prompt.context', async ($, e) => {
+    seen = e.blocks
+    return { blocks: e.blocks }
+  })
+  await $.prompt.context({ blocks: [{ name: 'claudeMd', text: '個案王小明的聯絡人是陳美玲' }] } as any)
+  expect(seen[0].text).toBe('個案〔保護對象01〕的聯絡人是〔個案B〕')
 })
