@@ -1,0 +1,16 @@
+{
+  "name": "pii-shield",
+  "version": "0.1.0",
+  "description": "Replace protected people's names, Taiwan ID numbers, phone numbers and emails with placeholders before the model reads them.",
+  "author": {
+    "name": "Jiang Yu-de"
+  },
+  "userConfig": {
+    "namesFile": {
+      "type": "string",
+      "title": "Names file",
+      "description": "Path to the protected names list. Relative paths start from the plugin folder. Default: names.txt in the plugin folder.",
+      "default": "names.txt"
+    }
+  }
+}

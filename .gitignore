@@ -1,0 +1,7 @@
+# The real protected-names list never leaves this machine
+names.txt
+*.names.txt
+.DS_Store
+.claude-plugin/types/
+tsconfig.json
+node_modules/
