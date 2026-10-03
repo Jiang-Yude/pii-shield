@@ -3,29 +3,48 @@ import type { Register } from 'claude-code'
 // Placeholders use 〔〕 so they never collide with ordinary text.
 // Every masking hook fails closed: if masking throws, the text is withheld, not sent as is.
 const AUTO_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
-  [/[A-Z][1289]\d{8}/g, '〔身分證號〕'],
-  [/09\d{2}[-\s]?\d{3}[-\s]?\d{3}/g, '〔手機號碼〕'],
+  // Taiwan national ID and resident certificate numbers, either case, not inside a longer token
+  [/(?<![A-Za-z0-9])[A-Za-z][1289A-Da-d]\d{8}(?![A-Za-z0-9])/g, '〔身分證號〕'],
+  // Taiwan mobile numbers: 0912-345-678, 0912 345 678, +886 912 345 678, 886-912-345-678
+  [/(?:\+?886[-\s]?|0)9\d{2}[-\s]?\d{3}[-\s]?\d{3}(?!\d)/g, '〔手機號碼〕'],
   [/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '〔Email〕'],
 ]
 
 const MEDIA = /\.(pdf|png|jpe?g|gif|webp|heic|bmp|tiff?)$/i
-const FAILED = '〔個資防護盾：遮蔽失敗，這段內容沒有送給 AI〕'
+const FAILED = '〔個資防護盾：遮蔽失敗或找不到名單，這段內容沒有送給 AI〕'
+
+// Only these tools write to local files; real names are put back into these fields alone.
+const WRITE_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  Edit: ['old_string', 'new_string'],
+  Write: ['content'],
+  MultiEdit: ['edits'],
+  NotebookEdit: ['new_source'],
+}
 
 type Entry = { real: string; alias: string }
 
 let entries: Entry[] | undefined
 let missing = false
-let restore = true
+let restore = false
+let allowEmpty = false
 let namesFile = 'names.txt'
 
 function parseNames(text: string): Entry[] {
   const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
   const parsed = lines.map((line, i) => {
-    const [real, alias] = line.split('=').map(s => s.trim())
+    const cut = line.indexOf('=')
+    const real = (cut === -1 ? line : line.slice(0, cut)).trim()
+    const alias = cut === -1 ? '' : line.slice(cut + 1).trim()
     return { real, alias: alias ? `〔${alias}〕` : `〔保護對象${String(i + 1).padStart(2, '0')}〕` }
-  })
+  }).filter(e => e.real.length > 0)
+  const aliases = new Set<string>()
+  for (const { real, alias } of parsed) {
+    if (aliases.has(alias)) throw new Error(`代號重複：${alias}`)
+    aliases.add(alias)
+    if (real.includes('〔') || real.includes('〕')) throw new Error('名字不能含〔〕')
+  }
   // Longest first, so 王小明 is replaced before 小明.
-  return parsed.filter(e => e.real.length > 0).sort((a, b) => b.real.length - a.real.length)
+  return parsed.sort((a, b) => b.real.length - a.real.length)
 }
 
 async function load($: any): Promise<Entry[]> {
@@ -42,6 +61,8 @@ async function load($: any): Promise<Entry[]> {
 }
 
 function mask(text: string, list: Entry[]): string {
+  // Without a names list, refuse to send anything unless the person chose auto patterns only.
+  if (missing && !allowEmpty) throw new Error('no names file')
   let out = text
   for (const { real, alias } of list) out = out.split(real).join(alias)
   for (const [re, label] of AUTO_PATTERNS) out = out.replace(re, label)
@@ -75,16 +96,21 @@ function maskBlocks(content: readonly any[], fn: (s: string) => string): any[] {
   })
 }
 
+function statusLine(count: number): string {
+  if (missing) return allowEmpty ? '個資防護盾：只遮號碼與 Email（未使用名單）' : '個資防護盾：找不到名單，已停止送出'
+  return `個資防護盾：保護 ${count} 個名字`
+}
+
 export const register: Register = (on, options) => {
   if (typeof options.namesFile === 'string' && options.namesFile.trim()) namesFile = options.namesFile.trim()
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'pii-shield',
-      description: 'Show 個資防護盾 status; "reload" re-reads names.txt; "restore on|off" toggles writing real names back into tool calls',
+      description: 'Show 個資防護盾 status; reload | restore on|off | no-names',
     })
-    const list = await load($)
-    $.ui.status(missing ? '個資防護盾：沒有 names.txt' : `個資防護盾：保護 ${list.length} 個名字`)
+    const list = await load($).catch(() => [])
+    $.ui.status(statusLine(list.length))
     return next(e)
   })
 
@@ -93,13 +119,20 @@ export const register: Register = (on, options) => {
     if (arg === 'reload') entries = undefined
     if (arg === 'restore on') restore = true
     if (arg === 'restore off') restore = false
-    const list = await load($)
-    $.ui.status(missing ? '個資防護盾：沒有 names.txt' : `個資防護盾：保護 ${list.length} 個名字`)
-    return {
-      text: missing
-        ? '個資防護盾：找不到 names.txt，目前只遮身分證號、手機與 Email。'
-        : `個資防護盾：保護 ${list.length} 個名字，寫回真名${restore ? '開啟' : '關閉'}。`,
+    if (arg === 'no-names') allowEmpty = true
+    let list: Entry[]
+    try {
+      list = await load($)
+    } catch (err) {
+      entries = undefined
+      $.ui.status('個資防護盾：名單有錯，已停止送出')
+      return { text: `個資防護盾：名單有錯（${(err as Error).message}），所有內容都不會送給 AI。改好後輸入 /pii-shield reload。` }
     }
+    $.ui.status(statusLine(list.length))
+    if (missing && !allowEmpty) {
+      return { text: '個資防護盾：找不到名單，所有內容都不會送給 AI。請建立 names.txt 後輸入 /pii-shield reload；只想遮號碼與 Email 就輸入 /pii-shield no-names。' }
+    }
+    return { text: `${statusLine(list.length)}，寫回真名${restore ? '開啟' : '關閉'}。` }
   })
 
   // What the person types, before it is queued or stored.
@@ -136,18 +169,22 @@ export const register: Register = (on, options) => {
     return next({ ...e, text: mask(e.text, list) })
   }).catch(($, e, next) => next({ ...e, text: FAILED }))
 
-  // Images and PDFs reach the model as media, which cannot be rewritten.
+  // Images and PDFs read with Read reach the model as media, which cannot be rewritten.
+  // Text that a command extracts from them is ordinary tool output and is masked above.
   on('tool.call', { tool: 'Read' }, async ($, e, next) =>
     MEDIA.test(e.file_path)
-      ? { deny: '個資防護盾：圖片與 PDF 裡的名字無法遮蔽，請先轉成文字檔再讀。' }
+      ? { deny: '個資防護盾：用 Read 讀圖片與 PDF 時無法遮蔽，請先轉成文字檔再讀。' }
       : next(e),
   )
 
-  // The model writes placeholders; put the real names back so edits match the files.
+  // Off by default. When on, real names go back only into local file writes,
+  // never into Bash, web, MCP or subagent calls.
   on('tool.call', async ($, e, next) => {
-    if (!restore) return next(e)
+    const fields = WRITE_FIELDS[(e as any).tool]
+    if (!restore || !fields) return next(e)
     const list = await load($)
-    const { tool, tool_use_id, agentId, consent, ...args } = e as any
-    return next({ ...e, ...(deep(args, s => unmask(s, list)) as object) } as any)
+    const patch: Record<string, unknown> = {}
+    for (const f of fields) if (f in (e as any)) patch[f] = deep((e as any)[f], s => unmask(s, list))
+    return next({ ...e, ...patch } as any)
   })
 }
