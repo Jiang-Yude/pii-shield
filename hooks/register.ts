@@ -135,17 +135,24 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'pii-shield' }, async ($, e) => {
     const arg = e.args.trim()
-    if (arg === 'reload') entries = undefined
-    if (arg === 'restore on') restore = true
-    if (arg === 'restore off') restore = false
-    if (arg === 'no-names') allowEmpty = true
+    if (arg === 'reload') {
+      entries = undefined
+      allowEmpty = false
+    }
     let list: Entry[]
     try {
       list = await load($)
     } catch (err) {
       entries = undefined
       $.ui.status('個資防護盾：名單有錯，已停止送出')
-      return { text: `個資防護盾：名單有錯（${(err as Error).message}），所有文字內容都不會送給 AI。改好後輸入 /pii-shield reload。` }
+      return { text: `個資防護盾：名單有錯（${(err as Error).message}），所有文字內容都不會送給 AI，這次的指令也沒有生效。改好後輸入 /pii-shield reload。` }
+    }
+    // Switches change only after the list loaded, so a failed command never changes the safety state.
+    if (arg === 'restore on') restore = true
+    if (arg === 'restore off') restore = false
+    if (arg === 'no-names') {
+      if (!missing) return { text: '個資防護盾：名單有效，不需要 no-names。' }
+      allowEmpty = true
     }
     $.ui.status(statusLine(list.length))
     if (missing && !allowEmpty) {

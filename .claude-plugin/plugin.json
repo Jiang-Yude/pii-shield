@@ -1,6 +1,6 @@
 {
   "name": "pii-shield",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Replace protected people's names, Taiwan ID numbers, phone numbers and emails with placeholders before the model reads them.",
   "author": {
     "name": "Jiang Yu-de"
